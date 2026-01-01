@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agent-control
+  labels:
+    app: pulling-agent
+data:
+  # Control state: running, pause, resume, shutdown
+  state: "running"
+
+---
+# Example: To pause the agent, update this ConfigMap:
+# kubectl create configmap agent-control --from-literal=state=pause -o yaml --dry-run=client | kubectl apply -f -
+#
+# To resume:
+# kubectl create configmap agent-control --from-literal=state=resume -o yaml --dry-run=client | kubectl apply -f -

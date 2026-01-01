@@ -1,0 +1,135 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pulling-agent
+  labels:
+    app: pulling-agent
+    version: v1
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pulling-agent
+  template:
+    metadata:
+      labels:
+        app: pulling-agent
+        version: v1
+    spec:
+      # Graceful shutdown - must be greater than SHUTDOWN_TIMEOUT
+      terminationGracePeriodSeconds: 45
+      
+      containers:
+      - name: agent
+        image: pulling-agent:latest
+        imagePullPolicy: IfNotPresent
+        
+        # Environment variables
+        env:
+        - name: MONGODB_URI
+          valueFrom:
+            secretKeyRef:
+              name: mongodb-secret
+              key: uri
+        - name: MONGODB_DATABASE
+          valueFrom:
+            configMapKeyRef:
+              name: agent-config
+              key: database
+        - name: MONGODB_COLLECTION
+          valueFrom:
+            configMapKeyRef:
+              name: agent-config
+              key: collection
+        - name: POLL_INTERVAL
+          valueFrom:
+            configMapKeyRef:
+              name: agent-config
+              key: poll_interval
+              optional: true
+        - name: BATCH_SIZE
+          valueFrom:
+            configMapKeyRef:
+              name: agent-config
+              key: batch_size
+              optional: true
+        - name: SHUTDOWN_TIMEOUT
+          value: "30"
+        - name: LOG_LEVEL
+          value: "INFO"
+        
+        # Resource limits
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        
+        # Liveness probe - check if heartbeat file is recent
+        livenessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - |
+              # Check if file exists and was modified in last 30 seconds
+              test -f /tmp/health/liveness && \
+              [ $(($(date +%s) - $(stat -c %Y /tmp/health/liveness))) -lt 30 ]
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        
+        # Readiness probe - check if ready file exists
+        readinessProbe:
+          exec:
+            command:
+            - test
+            - -f
+            - /tmp/health/readiness
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 2
+          failureThreshold: 3
+        
+        # Startup probe - give more time for initial MongoDB connection
+        startupProbe:
+          exec:
+            command:
+            - test
+            - -f
+            - /tmp/health/liveness
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          failureThreshold: 12  # 60 seconds total (5s * 12)
+        
+        # Volume mounts
+        volumeMounts:
+        - name: health
+          mountPath: /tmp/health
+        - name: control
+          mountPath: /tmp/control
+      
+      # Volumes
+      volumes:
+      - name: health
+        emptyDir: {}
+      - name: control
+        configMap:
+          name: agent-control
+          optional: true
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agent-config
+  labels:
+    app: pulling-agent
+data:
+  database: "mydb"
+  collection: "mycollection"
+  poll_interval: "5"
+  batch_size: "100"

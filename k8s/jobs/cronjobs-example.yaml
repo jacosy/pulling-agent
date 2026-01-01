@@ -1,0 +1,148 @@
+---
+# CronJob to pause agent during maintenance window
+# Example: Pause every day at 2 AM UTC
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: pause-agent-maintenance
+  labels:
+    app: pulling-agent-control
+    operation: scheduled-pause
+spec:
+  schedule: "0 2 * * *"  # Every day at 2 AM UTC
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    metadata:
+      labels:
+        app: pulling-agent-control
+        operation: pause
+    spec:
+      ttlSecondsAfterFinished: 3600  # Delete after 1 hour
+      template:
+        metadata:
+          labels:
+            app: pulling-agent-control
+        spec:
+          restartPolicy: Never
+          serviceAccountName: agent-controller
+          containers:
+          - name: pause
+            image: bitnami/kubectl:latest
+            command:
+            - /bin/bash
+            - -c
+            - |
+              echo "Scheduled pause: Maintenance window started"
+              kubectl create configmap agent-control \
+                --from-literal=state=pause \
+                -o yaml --dry-run=client | kubectl apply -f -
+              echo "Agent paused at $(date)"
+
+---
+# CronJob to resume agent after maintenance window
+# Example: Resume every day at 4 AM UTC
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: resume-agent-maintenance
+  labels:
+    app: pulling-agent-control
+    operation: scheduled-resume
+spec:
+  schedule: "0 4 * * *"  # Every day at 4 AM UTC
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    metadata:
+      labels:
+        app: pulling-agent-control
+        operation: resume
+    spec:
+      ttlSecondsAfterFinished: 3600
+      template:
+        metadata:
+          labels:
+            app: pulling-agent-control
+        spec:
+          restartPolicy: Never
+          serviceAccountName: agent-controller
+          containers:
+          - name: resume
+            image: bitnami/kubectl:latest
+            command:
+            - /bin/bash
+            - -c
+            - |
+              echo "Scheduled resume: Maintenance window ended"
+              kubectl create configmap agent-control \
+                --from-literal=state=resume \
+                -o yaml --dry-run=client | kubectl apply -f -
+              echo "Agent resumed at $(date)"
+
+---
+# Example: Pause during business hours, resume outside business hours
+# Pause at 9 AM on weekdays
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: pause-agent-business-hours
+  labels:
+    app: pulling-agent-control
+spec:
+  schedule: "0 9 * * 1-5"  # 9 AM, Monday-Friday
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: Never
+          serviceAccountName: agent-controller
+          containers:
+          - name: pause
+            image: bitnami/kubectl:latest
+            command:
+            - /bin/bash
+            - -c
+            - |
+              kubectl create configmap agent-control \
+                --from-literal=state=pause \
+                -o yaml --dry-run=client | kubectl apply -f -
+
+---
+# Resume at 6 PM on weekdays
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: resume-agent-off-hours
+  labels:
+    app: pulling-agent-control
+spec:
+  schedule: "0 18 * * 1-5"  # 6 PM, Monday-Friday
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: Never
+          serviceAccountName: agent-controller
+          containers:
+          - name: resume
+            image: bitnami/kubectl:latest
+            command:
+            - /bin/bash
+            - -c
+            - |
+              kubectl create configmap agent-control \
+                --from-literal=state=resume \
+                -o yaml --dry-run=client | kubectl apply -f -
+
+---
+# Notes:
+# - All CronJobs use UTC timezone
+# - Requires ServiceAccount 'agent-controller' with proper RBAC (see control-jobs.yaml)
+# - Customize schedules using cron format: "minute hour day month day-of-week"
+# - Common patterns:
+#   - "0 2 * * *"       - Every day at 2 AM
+#   - "0 9 * * 1-5"     - Weekdays at 9 AM
+#   - "*/30 * * * *"    - Every 30 minutes
+#   - "0 */4 * * *"     - Every 4 hours
+#   - "0 0 * * 0"       - Every Sunday at midnight

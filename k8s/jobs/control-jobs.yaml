@@ -1,0 +1,111 @@
+---
+# Job to pause the agent
+# Usage: kubectl apply -f k8s/jobs/pause-agent.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pause-pulling-agent
+  labels:
+    app: pulling-agent-control
+    operation: pause
+spec:
+  ttlSecondsAfterFinished: 300  # Auto-delete after 5 minutes
+  template:
+    metadata:
+      labels:
+        app: pulling-agent-control
+        operation: pause
+    spec:
+      restartPolicy: Never
+      serviceAccountName: agent-controller  # Needs permissions to update ConfigMap
+      containers:
+      - name: pause
+        image: bitnami/kubectl:latest
+        command:
+        - /bin/bash
+        - -c
+        - |
+          echo "Pausing pulling agent..."
+          kubectl create configmap agent-control \
+            --from-literal=state=pause \
+            -o yaml --dry-run=client | kubectl apply -f -
+          echo "ConfigMap updated to 'pause'"
+          echo "Waiting for agent to acknowledge..."
+          sleep 5
+          echo "Done. Check agent logs to verify pause."
+
+---
+# Job to resume the agent
+# Usage: kubectl apply -f k8s/jobs/resume-agent.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: resume-pulling-agent
+  labels:
+    app: pulling-agent-control
+    operation: resume
+spec:
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        app: pulling-agent-control
+        operation: resume
+    spec:
+      restartPolicy: Never
+      serviceAccountName: agent-controller
+      containers:
+      - name: resume
+        image: bitnami/kubectl:latest
+        command:
+        - /bin/bash
+        - -c
+        - |
+          echo "Resuming pulling agent..."
+          kubectl create configmap agent-control \
+            --from-literal=state=resume \
+            -o yaml --dry-run=client | kubectl apply -f -
+          echo "ConfigMap updated to 'resume'"
+          echo "Waiting for agent to acknowledge..."
+          sleep 5
+          echo "Done. Check agent logs to verify resume."
+
+---
+# ServiceAccount and RBAC for control jobs
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: agent-controller
+  labels:
+    app: pulling-agent-control
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: agent-controller
+  labels:
+    app: pulling-agent-control
+rules:
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "create", "update", "patch"]
+  resourceNames: ["agent-control"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["create"]  # For initial creation
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: agent-controller
+  labels:
+    app: pulling-agent-control
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: agent-controller
+subjects:
+- kind: ServiceAccount
+  name: agent-controller
