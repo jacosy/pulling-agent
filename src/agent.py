@@ -10,6 +10,7 @@ import logging
 
 from .config import AgentConfig, AgentState
 from .mongo_client import MongoClientManager
+from .trigger_worker import TriggerWorker
 
 logger = logging.getLogger(__name__)
 
@@ -30,31 +31,32 @@ class PullingAgent:
         self.config = config
         self.mongo = mongo_manager
         self.state = AgentState.RUNNING
-        
+
+        # Worker for processing documents
+        self.worker = TriggerWorker(config, mongo_manager)
+
         # Event coordination
         self._shutdown_event = asyncio.Event()
         self._pause_event = asyncio.Event()
         self._pause_event.set()  # Start unpaused
-        
+
         # Health check files
         self.health_dir = Path("/tmp/health")
         self.health_dir.mkdir(exist_ok=True)
         self.liveness_file = self.health_dir / "liveness"
         self.readiness_file = self.health_dir / "readiness"
-        
+
         # Control file
         self.control_file = Path("/tmp/control/state")
-        
+
         # Background tasks
         self._heartbeat_task: Optional[asyncio.Task] = None
         self._control_monitor_task: Optional[asyncio.Task] = None
-        
+
         # Statistics
         self._last_heartbeat = datetime.now()
-        self._batches_processed = 0
-        self._documents_processed = 0
         self._errors_count = 0
-        
+
         # Setup signal handlers
         self._setup_signal_handlers()
     
@@ -108,12 +110,12 @@ class PullingAgent:
             while not self._shutdown_event.is_set():
                 # Wait if paused
                 await self._pause_event.wait()
-                
+
                 try:
-                    # Process one batch
-                    await self._process_batch()
+                    # Process one batch using worker
+                    await self.worker.process_batch()
                     self._last_heartbeat = datetime.now()
-                    
+
                 except Exception as e:
                     logger.error(f"Error processing batch: {e}", exc_info=True)
                     self._errors_count += 1
@@ -156,92 +158,14 @@ class PullingAgent:
             
             # Close MongoDB connection
             await self.mongo.close()
-            
+
             # Log final statistics
-            logger.info(f"Agent stopped. Stats: batches={self._batches_processed}, "
-                       f"documents={self._documents_processed}, errors={self._errors_count}")
-            
+            stats = self.worker.get_statistics()
+            logger.info(f"Agent stopped. Stats: batches={stats['batches_processed']}, "
+                       f"documents={stats['documents_processed']}, errors={self._errors_count}")
+
             self.state = AgentState.STOPPED
-    
-    async def _process_batch(self) -> None:
-        """
-        Pull and process one batch of documents from MongoDB.
-        
-        TODO: Implement your business logic here.
-        This is a placeholder that demonstrates the pattern.
-        """
-        try:
-            # Example: Find pending documents
-            cursor = self.mongo.collection.find(
-                {"status": "pending"},
-                limit=self.config.batch_size
-            )
-            
-            documents = await cursor.to_list(length=self.config.batch_size)
-            
-            if not documents:
-                logger.debug("No pending documents found")
-                return
-            
-            logger.info(f"Processing batch of {len(documents)} documents")
-            
-            # Process each document
-            for doc in documents:
-                try:
-                    # Your processing logic here
-                    await self._process_document(doc)
-                    
-                    # Mark as processed
-                    await self.mongo.collection.update_one(
-                        {"_id": doc["_id"]},
-                        {
-                            "$set": {
-                                "status": "processed",
-                                "processed_at": datetime.utcnow()
-                            }
-                        }
-                    )
-                    
-                    self._documents_processed += 1
-                
-                except Exception as e:
-                    logger.error(f"Failed to process document {doc.get('_id')}: {e}")
-                    
-                    # Mark as failed
-                    await self.mongo.collection.update_one(
-                        {"_id": doc["_id"]},
-                        {
-                            "$set": {
-                                "status": "failed",
-                                "error": str(e),
-                                "failed_at": datetime.utcnow()
-                            }
-                        }
-                    )
-            
-            self._batches_processed += 1
-            logger.info(f"Batch completed. Total: {self._batches_processed} batches, "
-                       f"{self._documents_processed} documents")
-        
-        except Exception as e:
-            logger.error(f"Batch processing failed: {e}", exc_info=True)
-            raise
-    
-    async def _process_document(self, document: dict) -> None:
-        """
-        Process a single document.
-        
-        TODO: Implement your business logic here.
-        
-        Args:
-            document: MongoDB document to process
-        """
-        # Placeholder - add your processing logic
-        logger.debug(f"Processing document: {document.get('_id')}")
-        
-        # Simulate some work
-        await asyncio.sleep(0.01)
-    
+
     async def _update_heartbeat(self) -> None:
         """Periodically update liveness file timestamp"""
         while True:
@@ -304,11 +228,12 @@ class PullingAgent:
         try:
             if healthy:
                 # Touch file and write status
+                stats = self.worker.get_statistics()
                 self.liveness_file.write_text(
                     f"{self.state.value}\n"
                     f"{datetime.now().isoformat()}\n"
-                    f"batches={self._batches_processed}\n"
-                    f"documents={self._documents_processed}\n"
+                    f"batches={stats['batches_processed']}\n"
+                    f"documents={stats['documents_processed']}\n"
                     f"errors={self._errors_count}\n"
                 )
             else:
