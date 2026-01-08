@@ -57,7 +57,17 @@ spec:
           value: "30"
         - name: LOG_LEVEL
           value: "INFO"
-        
+        - name: API_HOST
+          value: "0.0.0.0"
+        - name: API_PORT
+          value: "8000"
+
+        # Container ports
+        ports:
+        - name: http
+          containerPort: 8000
+          protocol: TCP
+
         # Resource limits
         resources:
           requests:
@@ -67,28 +77,23 @@ spec:
             memory: "512Mi"
             cpu: "500m"
         
-        # Liveness probe - check if heartbeat file is recent
+        # Liveness probe - HTTP endpoint (replaces file-based check)
         livenessProbe:
-          exec:
-            command:
-            - /bin/sh
-            - -c
-            - |
-              # Check if file exists and was modified in last 30 seconds
-              test -f /tmp/health/liveness && \
-              [ $(($(date +%s) - $(stat -c %Y /tmp/health/liveness))) -lt 30 ]
+          httpGet:
+            path: /health
+            port: 8000
+            scheme: HTTP
           initialDelaySeconds: 10
           periodSeconds: 10
           timeoutSeconds: 5
           failureThreshold: 3
-        
-        # Readiness probe - check if ready file exists
+
+        # Readiness probe - HTTP endpoint (replaces file-based check)
         readinessProbe:
-          exec:
-            command:
-            - test
-            - -f
-            - /tmp/health/readiness
+          httpGet:
+            path: /readiness
+            port: 8000
+            scheme: HTTP
           initialDelaySeconds: 5
           periodSeconds: 5
           timeoutSeconds: 2
@@ -96,11 +101,10 @@ spec:
         
         # Startup probe - give more time for initial MongoDB connection
         startupProbe:
-          exec:
-            command:
-            - test
-            - -f
-            - /tmp/health/liveness
+          httpGet:
+            path: /health
+            port: 8000
+            scheme: HTTP
           initialDelaySeconds: 5
           periodSeconds: 5
           failureThreshold: 12  # 60 seconds total (5s * 12)
@@ -133,3 +137,20 @@ data:
   collection: "mycollection"
   poll_interval: "5"
   batch_size: "100"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pulling-agent
+  labels:
+    app: pulling-agent
+spec:
+  type: ClusterIP
+  ports:
+  - port: 8000
+    targetPort: 8000
+    protocol: TCP
+    name: http
+  selector:
+    app: pulling-agent
