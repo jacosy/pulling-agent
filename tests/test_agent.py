@@ -38,7 +38,7 @@ def mongo_manager(config):
 
 
 @pytest.fixture
-async def agent(config, mongo_manager):
+def agent(config, mongo_manager):
     """Create agent instance for testing"""
     # Mock signal handler setup to avoid issues in tests
     with patch('signal.signal'):
@@ -50,9 +50,9 @@ async def agent(config, mongo_manager):
         agent.readiness_file = agent.health_dir / "readiness"
         agent.control_file = Path("/tmp/test_control/state")
         agent.control_file.parent.mkdir(exist_ok=True)
-        
+
         yield agent
-        
+
         # Cleanup
         if agent.liveness_file.exists():
             agent.liveness_file.unlink()
@@ -151,23 +151,23 @@ class TestPullingAgent:
     
     @pytest.mark.asyncio
     async def test_process_batch_called(self, agent):
-        """Test that process_batch is called during run"""
-        # Mock _process_batch
-        agent._process_batch = AsyncMock()
-        
+        """Test that worker.process_batch is called during run"""
+        # Mock worker.process_batch
+        agent.worker.process_batch = AsyncMock()
+
         # Create a task that will shutdown after short delay
         async def delayed_shutdown():
             await asyncio.sleep(0.1)
             await agent.shutdown()
-        
+
         # Run agent with auto-shutdown
         await asyncio.gather(
             agent.run(),
             delayed_shutdown()
         )
-        
-        # Verify process_batch was called
-        assert agent._process_batch.called
+
+        # Verify worker.process_batch was called
+        assert agent.worker.process_batch.called
         assert agent.mongo.connect.called
         assert agent.mongo.close.called
 
