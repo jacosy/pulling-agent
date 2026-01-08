@@ -4,38 +4,49 @@ A robust, production-ready background job for pulling data from MongoDB collecti
 
 ## Features
 
+- ✅ **HTTP API endpoints** for control and monitoring (no kubectl exec required)
 - ✅ Graceful shutdown handling (SIGTERM/SIGINT)
-- ✅ File-based health checks (no HTTP dependencies)
-- ✅ Pause/resume control via signals or ConfigMap
+- ✅ HTTP-based health checks for Kubernetes probes
+- ✅ Pause/resume control via API, signals, or ConfigMap
 - ✅ Interruptible polling with configurable intervals
 - ✅ Heartbeat monitoring for liveness detection
 - ✅ Structured logging
 - ✅ Async MongoDB operations with Motor
+- ✅ Production-ready with comprehensive monitoring
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────┐
-│         Kubernetes Pod              │
-│  ┌───────────────────────────────┐  │
-│  │     Pulling Agent Process     │  │
-│  │                               │  │
-│  │  ┌─────────────────────────┐  │  │
-│  │  │   Main Event Loop       │  │  │
-│  │  │   - Poll MongoDB        │  │  │
-│  │  │   - Process batches     │  │  │
-│  │  │   - Handle signals      │  │  │
-│  │  └─────────────────────────┘  │  │
-│  │                               │  │
-│  │  ┌─────────────────────────┐  │  │
-│  │  │  Heartbeat Task         │  │  │
-│  │  │  - Update /tmp/health/  │  │  │
-│  │  └─────────────────────────┘  │  │
-│  └───────────────────────────────┘  │
-│                                     │
-│  Volume: /tmp/health (emptyDir)     │
-│  Volume: /tmp/control (ConfigMap)   │
-└─────────────────────────────────────┘
+┌───────────────────────────────────────────────┐
+│         Kubernetes Pod                        │
+│  ┌─────────────────────────────────────────┐  │
+│  │     Pulling Agent Process               │  │
+│  │                                         │  │
+│  │  ┌───────────────────────────────────┐  │  │
+│  │  │   FastAPI Server (Port 8000)      │  │  │
+│  │  │   - Control endpoints             │  │  │
+│  │  │   - Health/Readiness probes       │  │  │
+│  │  │   - Statistics & monitoring       │  │  │
+│  │  └───────────────────────────────────┘  │  │
+│  │                                         │  │
+│  │  ┌───────────────────────────────────┐  │  │
+│  │  │   Main Event Loop                 │  │  │
+│  │  │   - Poll MongoDB                  │  │  │
+│  │  │   - Process batches               │  │  │
+│  │  │   - Handle signals                │  │  │
+│  │  └───────────────────────────────────┘  │  │
+│  │                                         │  │
+│  │  ┌───────────────────────────────────┐  │  │
+│  │  │  Background Tasks                 │  │  │
+│  │  │  - Heartbeat monitoring           │  │  │
+│  │  │  - Control file monitoring        │  │  │
+│  │  └───────────────────────────────────┘  │  │
+│  └─────────────────────────────────────────┘  │
+│                                               │
+│  Service: pulling-agent:8000 (ClusterIP)      │
+│  Volume: /tmp/health (emptyDir)               │
+│  Volume: /tmp/control (ConfigMap)             │
+└───────────────────────────────────────────────┘
          ↓
     MongoDB Cluster
 ```
@@ -47,13 +58,16 @@ pulling-agent/
 ├── src/
 │   ├── __init__.py
 │   ├── agent.py           # Core PullingAgent class
+│   ├── api.py             # FastAPI endpoints for control & monitoring
 │   ├── config.py          # Configuration management
 │   ├── main.py            # Application entry point
 │   └── mongo_client.py    # MongoDB connection handling
 ├── k8s/
-│   ├── deployment.yaml    # Kubernetes Deployment
+│   ├── deployment.yaml    # Kubernetes Deployment + Service
 │   ├── configmap.yaml     # Control ConfigMap
 │   └── secret.yaml        # MongoDB credentials (example)
+├── docs/
+│   └── API-REFERENCE.md   # API documentation
 ├── tests/
 │   ├── __init__.py
 │   └── test_agent.py      # Unit tests
@@ -141,14 +155,47 @@ kubectl get pods -l app=pulling-agent
 | `SHUTDOWN_TIMEOUT` | No | 30 | Graceful shutdown timeout (seconds) |
 | `LOG_LEVEL` | No | INFO | Logging level (DEBUG, INFO, WARNING, ERROR) |
 | `HEARTBEAT_INTERVAL` | No | 5 | Heartbeat update interval (seconds) |
+| `API_HOST` | No | 0.0.0.0 | API server bind address |
+| `API_PORT` | No | 8000 | API server port |
 
 ## Control Operations
 
-### Quick Pause/Resume
+The agent provides multiple methods for control and monitoring. **HTTP API is the recommended method for production environments** as it doesn't require `kubectl exec` access.
 
-The agent provides multiple methods to pause and resume operations:
+### API Endpoints (Recommended for Production)
 
-**Using the control script (recommended):**
+**Port forward to access the API:**
+```bash
+kubectl port-forward svc/pulling-agent 8000:8000
+```
+
+**Pause the agent:**
+```bash
+curl -X POST http://localhost:8000/api/agent/pause
+```
+
+**Resume the agent:**
+```bash
+curl -X POST http://localhost:8000/api/agent/resume
+```
+
+**Check status:**
+```bash
+curl http://localhost:8000/api/agent/state
+curl http://localhost:8000/api/stats
+```
+
+**Health checks:**
+```bash
+curl http://localhost:8000/health
+curl http://localhost:8000/readiness
+```
+
+📖 **See [docs/API-REFERENCE.md](docs/API-REFERENCE.md) for complete API documentation.**
+
+### Alternative Control Methods
+
+**Using the control script:**
 ```bash
 # Pause the agent
 ./scripts/control-agent.sh pause
@@ -181,7 +228,9 @@ make k8s-pause
 make k8s-resume
 ```
 
-### Pause/Resume via Signals
+### Pause/Resume via Signals (Legacy)
+
+> **Note:** Use the HTTP API instead of kubectl exec for production environments.
 
 ```bash
 # Get pod name
