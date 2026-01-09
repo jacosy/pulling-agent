@@ -5,11 +5,13 @@ import asyncio
 import logging
 import sys
 import os
+import signal
 
 from .config import AgentConfig
 from .mongo_client import MongoClientManager
 from .agent import PullingAgent
 from .api import create_api
+from .supervisor import Supervisor
 
 import uvicorn
 
@@ -39,7 +41,7 @@ async def run_api_server(app, host: str, port: int) -> None:
 
 
 async def main() -> None:
-    """Main application entry point"""
+    """Main application entry point with supervised components"""
     # Load configuration from environment
     config = AgentConfig.from_env()
 
@@ -72,20 +74,67 @@ async def main() -> None:
     api_host = os.getenv("API_HOST", "0.0.0.0")
     api_port = int(os.getenv("API_PORT", "8000"))
 
-    logger.info(f"Starting API server on {api_host}:{api_port}")
-    logger.info("Starting pulling agent")
+    # Create supervisor for crash recovery
+    supervisor = Supervisor()
+
+    # Add agent as supervised component
+    supervisor.add_component(
+        name="agent",
+        component_func=agent.run,
+        max_restarts=config.max_component_restarts,
+        max_backoff=config.restart_backoff_max
+    )
+
+    # Add API server as supervised component
+    supervisor.add_component(
+        name="api-server",
+        component_func=lambda: run_api_server(api_app, api_host, api_port),
+        max_restarts=config.max_component_restarts,
+        max_backoff=config.restart_backoff_max
+    )
+
+    # Setup signal handlers for graceful shutdown
+    def signal_handler(sig):
+        """Handle shutdown signals"""
+        logger.info(f"Received signal {signal.Signals(sig).name}, initiating shutdown")
+        supervisor._shutdown_event.set()
+
+    # Register signal handlers
+    loop = asyncio.get_event_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, lambda s=sig: signal_handler(s))
+
+    logger.info(f"Starting supervised API server on {api_host}:{api_port}")
+    logger.info("Starting supervised pulling agent")
+    logger.info(f"Components will auto-restart up to {config.max_component_restarts} times on crash")
 
     try:
-        # Run both agent and API server concurrently
-        await asyncio.gather(
-            agent.run(),
-            run_api_server(api_app, api_host, api_port)
-        )
+        # Start all supervised components
+        await supervisor.start_all()
+
+        # Wait for shutdown signal or component failure
+        await supervisor.wait_for_shutdown()
+
+        logger.info("Shutdown initiated, stopping all components")
+
     except KeyboardInterrupt:
         logger.info("Received keyboard interrupt")
     except Exception as e:
         logger.error(f"Application failed with error: {e}", exc_info=True)
-        sys.exit(1)
+    finally:
+        # Stop all supervised components
+        await supervisor.stop_all()
+
+        # Log final statistics
+        stats = supervisor.get_all_stats()
+        logger.info("Final component statistics:")
+        for component_name, component_stats in stats.items():
+            logger.info(
+                f"  {component_name}: "
+                f"state={component_stats['state']}, "
+                f"crashes={component_stats['crash_count']}, "
+                f"restarts={component_stats['restart_count']}"
+            )
 
     logger.info("Application shutdown complete")
 
