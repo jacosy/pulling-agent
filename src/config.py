@@ -31,7 +31,11 @@ class AgentConfig:
     shutdown_timeout: int = 30      # seconds for graceful shutdown
     heartbeat_interval: int = 5     # seconds between heartbeat updates
     max_retries: int = 3            # max retries for failed operations
-    
+
+    # Restart/crash recovery settings
+    max_component_restarts: int = 10    # max automatic restarts per component
+    restart_backoff_max: float = 60.0   # max seconds between restart attempts
+
     # Logging
     log_level: str = "INFO"
     
@@ -47,6 +51,8 @@ class AgentConfig:
             shutdown_timeout=int(os.getenv("SHUTDOWN_TIMEOUT", "30")),
             heartbeat_interval=int(os.getenv("HEARTBEAT_INTERVAL", "5")),
             max_retries=int(os.getenv("MAX_RETRIES", "3")),
+            max_component_restarts=int(os.getenv("MAX_COMPONENT_RESTARTS", "10")),
+            restart_backoff_max=float(os.getenv("RESTART_BACKOFF_MAX", "60.0")),
             log_level=os.getenv("LOG_LEVEL", "INFO"),
         )
     
