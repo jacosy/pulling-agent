@@ -11,6 +11,7 @@ import logging
 from .config import AgentConfig, AgentState
 from .mongo_client import MongoClientManager
 from .trigger_worker import TriggerWorker
+from .distributed_control import DistributedControlCoordinator
 
 logger = logging.getLogger(__name__)
 
@@ -49,9 +50,20 @@ class PullingAgent:
         # Control file
         self.control_file = Path("/tmp/control/state")
 
+        # Distributed control (optional, based on config)
+        self.distributed_control: Optional[DistributedControlCoordinator] = None
+        if config.enable_distributed_control:
+            self.distributed_control = DistributedControlCoordinator(
+                mongo_client=mongo_manager.client,
+                db_name=config.mongodb_database,
+                polling_interval=config.control_polling_interval,
+                enable_change_streams=config.enable_change_streams
+            )
+
         # Background tasks
         self._heartbeat_task: Optional[asyncio.Task] = None
         self._control_monitor_task: Optional[asyncio.Task] = None
+        self._distributed_watch_task: Optional[asyncio.Task] = None
 
         # Statistics
         self._last_heartbeat = datetime.now()
@@ -63,40 +75,98 @@ class PullingAgent:
     def _setup_signal_handlers(self) -> None:
         """Setup Unix signal handlers for graceful shutdown and control"""
         loop = asyncio.get_event_loop()
-        
+
         # SIGTERM: Graceful shutdown (K8s sends this)
         loop.add_signal_handler(
             signal.SIGTERM,
             lambda: asyncio.create_task(self.shutdown())
         )
-        
+
         # SIGINT: Graceful shutdown (Ctrl+C)
         loop.add_signal_handler(
             signal.SIGINT,
             lambda: asyncio.create_task(self.shutdown())
         )
-        
+
         # SIGUSR1: Pause
         loop.add_signal_handler(
             signal.SIGUSR1,
             lambda: self.pause()
         )
-        
+
         # SIGUSR2: Resume
         loop.add_signal_handler(
             signal.SIGUSR2,
             lambda: self.resume()
         )
+
+    async def _on_distributed_control_command(self, command: str, document: dict) -> None:
+        """
+        Callback executed when global control command changes.
+        Called by MongoDB Change Stream or polling mechanism.
+        """
+        logger.info(
+            f"[Worker Control] Processing global command: {command} "
+            f"(version {document['version']}, reason: {document.get('reason', 'N/A')})"
+        )
+
+        if command == "pause":
+            self.pause()
+        elif command == "running":  # "resume" is represented as "running"
+            self.resume()
+        elif command == "shutdown":
+            await self.shutdown()
+        else:
+            logger.warning(f"[Worker Control] Unknown command received: {command}")
+
+    async def _sync_initial_distributed_state(self) -> None:
+        """
+        On startup, sync agent state with current global command.
+        This handles the case where the agent starts when command is already "pause".
+        """
+        if not self.distributed_control:
+            return
+
+        current = await self.distributed_control.get_current_command()
+        if current:
+            command = current["command"]
+            logger.info(
+                f"[Worker Control] Initial global state: {command} "
+                f"(version {current['version']})"
+            )
+
+            # Apply initial state
+            if command == "pause" and self.state == AgentState.RUNNING:
+                logger.info("[Worker Control] Syncing to paused state on startup")
+                self.pause()
+            elif command == "running" and self.state == AgentState.PAUSED:
+                logger.info("[Worker Control] Syncing to running state on startup")
+                self.resume()
     
     async def run(self) -> None:
         """Main event loop"""
         logger.info("Starting pulling agent")
         logger.info(f"Configuration: poll_interval={self.config.poll_interval}s, "
                    f"batch_size={self.config.batch_size}")
-        
+
         # Connect to MongoDB
         await self.mongo.connect()
-        
+
+        # Initialize distributed control if enabled
+        if self.distributed_control:
+            logger.info("[Worker Control] Initializing cluster coordination")
+            await self.distributed_control.initialize()
+            await self._sync_initial_distributed_state()
+
+            # Start watching for distributed control changes
+            self._distributed_watch_task = self.distributed_control.start_watching(
+                self._on_distributed_control_command
+            )
+            logger.info(
+                f"[Worker Control] Started watching "
+                f"(mode will be auto-detected: Change Streams or Polling)"
+            )
+
         # Start background tasks
         self._heartbeat_task = asyncio.create_task(self._update_heartbeat())
         self._control_monitor_task = asyncio.create_task(self._monitor_control_file())
@@ -136,7 +206,12 @@ class PullingAgent:
         finally:
             # Cleanup
             logger.info("Cleaning up agent resources")
-            
+
+            # Stop distributed control watcher
+            if self.distributed_control:
+                logger.info("[Worker Control] Stopping watch task")
+                await self.distributed_control.stop_watching()
+
             # Cancel background tasks
             if self._heartbeat_task:
                 self._heartbeat_task.cancel()
@@ -144,18 +219,18 @@ class PullingAgent:
                     await self._heartbeat_task
                 except asyncio.CancelledError:
                     pass
-            
+
             if self._control_monitor_task:
                 self._control_monitor_task.cancel()
                 try:
                     await self._control_monitor_task
                 except asyncio.CancelledError:
                     pass
-            
+
             # Update health status
             self._update_readiness(ready=False)
             self._update_liveness(healthy=False)
-            
+
             # Close MongoDB connection
             await self.mongo.close()
 

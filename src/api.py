@@ -51,6 +51,26 @@ class MessageResponse(BaseModel):
     message: str
     state: Optional[str] = None
 
+class WorkerCommandResponse(BaseModel):
+    """Worker command response"""
+    status: str
+    message: str
+    command: str
+    version: int
+    timestamp: str
+    reason: str
+    propagation: str
+
+class WorkerStateResponse(BaseModel):
+    """Worker control state response"""
+    command: str
+    version: int
+    timestamp: str
+    reason: str
+    updated_by: str
+    watch_mode: Optional[str] = None
+    note: str
+
 
 class AgentAPI:
     """
@@ -230,11 +250,12 @@ class AgentAPI:
             - Uptime
             """
             uptime = (datetime.now() - self.start_time).total_seconds()
+            worker_stats = self.agent.worker.get_statistics()
 
             return StatsResponse(
                 state=self.agent.state.value,
-                batches_processed=self.agent._batches_processed,
-                documents_processed=self.agent._documents_processed,
+                batches_processed=worker_stats['batches_processed'],
+                documents_processed=worker_stats['documents_processed'],
                 errors_count=self.agent._errors_count,
                 last_heartbeat=self.agent._last_heartbeat.isoformat(),
                 uptime_seconds=uptime
@@ -280,6 +301,271 @@ class AgentAPI:
                 raise HTTPException(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                     detail=f"MongoDB connection error: {str(e)}"
+                )
+
+        # ========== WORKER CONTROL ENDPOINTS ==========
+        # These endpoints control ALL workers via distributed coordination
+
+        @self.app.post("/api/worker/pause", response_model=WorkerCommandResponse)
+        async def pause_all_workers(reason: str = "Manual worker pause", updated_by: str = "api_user"):
+            """
+            Pause ALL workers.
+
+            This uses MongoDB-based distributed control to coordinate all worker instances.
+            The command is propagated via:
+            - MongoDB Change Streams (event-driven, sub-second latency) if available, OR
+            - Polling (configurable interval, default 10s) as fallback
+
+            Args:
+                reason: Human-readable reason for the pause
+                updated_by: Who/what is issuing this command (for audit)
+
+            Returns:
+                Command acknowledgment with version number
+
+            Note:
+                - All workers will pause after completing their current batch
+                - Workers will receive the command within seconds
+                - Command survives pod restarts
+            """
+            if not self.agent.distributed_control:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Distributed control is not enabled on this agent"
+                )
+
+            try:
+                result = await self.agent.distributed_control.set_global_command(
+                    command="pause",
+                    reason=reason,
+                    updated_by=updated_by
+                )
+
+                watch_mode = self.agent.distributed_control.get_watch_mode()
+                propagation = (
+                    "Workers will pause within seconds (event-driven via Change Streams)"
+                    if watch_mode == "change_streams"
+                    else f"Workers will pause within {self.agent.config.control_polling_interval}s (polling mode)"
+                )
+
+                logger.info(f"[Worker Control] Pause command issued by {updated_by}: {reason}")
+
+                return WorkerCommandResponse(
+                    status="success",
+                    message="Pause command issued to all workers",
+                    command="pause",
+                    version=result["version"],
+                    timestamp=result["timestamp"].isoformat(),
+                    reason=reason,
+                    propagation=propagation
+                )
+
+            except Exception as e:
+                logger.error(f"Failed to set worker pause command: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Failed to issue worker pause: {str(e)}"
+                )
+
+        @self.app.post("/api/worker/resume", response_model=WorkerCommandResponse)
+        async def resume_all_workers(reason: str = "Manual worker resume", updated_by: str = "api_user"):
+            """
+            Resume ALL workers.
+
+            This uses MongoDB-based distributed control to coordinate all worker instances.
+            The command is propagated via:
+            - MongoDB Change Streams (event-driven, sub-second latency) if available, OR
+            - Polling (configurable interval, default 10s) as fallback
+
+            Args:
+                reason: Human-readable reason for the resume
+                updated_by: Who/what is issuing this command (for audit)
+
+            Returns:
+                Command acknowledgment with version number
+
+            Note:
+                - All workers will resume processing immediately
+                - Workers will receive the command within seconds
+                - Command survives pod restarts
+            """
+            if not self.agent.distributed_control:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Distributed control is not enabled on this agent"
+                )
+
+            try:
+                result = await self.agent.distributed_control.set_global_command(
+                    command="running",
+                    reason=reason,
+                    updated_by=updated_by
+                )
+
+                watch_mode = self.agent.distributed_control.get_watch_mode()
+                propagation = (
+                    "Workers will resume within seconds (event-driven via Change Streams)"
+                    if watch_mode == "change_streams"
+                    else f"Workers will resume within {self.agent.config.control_polling_interval}s (polling mode)"
+                )
+
+                logger.info(f"[Worker Control] Resume command issued by {updated_by}: {reason}")
+
+                return WorkerCommandResponse(
+                    status="success",
+                    message="Resume command issued to all workers",
+                    command="running",
+                    version=result["version"],
+                    timestamp=result["timestamp"].isoformat(),
+                    reason=reason,
+                    propagation=propagation
+                )
+
+            except Exception as e:
+                logger.error(f"Failed to set worker resume command: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Failed to issue worker resume: {str(e)}"
+                )
+
+        @self.app.post("/api/worker/shutdown", response_model=WorkerCommandResponse)
+        async def shutdown_all_workers(reason: str = "Manual worker shutdown", updated_by: str = "api_user"):
+            """
+            Gracefully shutdown ALL workers.
+
+            This uses MongoDB-based distributed control to coordinate all worker instances.
+            The command is propagated via:
+            - MongoDB Change Streams (event-driven, sub-second latency) if available, OR
+            - Polling (configurable interval, default 10s) as fallback
+
+            Args:
+                reason: Human-readable reason for the shutdown
+                updated_by: Who/what is issuing this command (for audit)
+
+            Returns:
+                Command acknowledgment with version number
+
+            Warning:
+                This will shutdown ALL workers. Use with caution!
+            """
+            if not self.agent.distributed_control:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Distributed control is not enabled on this agent"
+                )
+
+            try:
+                result = await self.agent.distributed_control.set_global_command(
+                    command="shutdown",
+                    reason=reason,
+                    updated_by=updated_by
+                )
+
+                watch_mode = self.agent.distributed_control.get_watch_mode()
+                propagation = (
+                    "Workers will shutdown gracefully within seconds (event-driven via Change Streams)"
+                    if watch_mode == "change_streams"
+                    else f"Workers will shutdown within {self.agent.config.control_polling_interval}s (polling mode)"
+                )
+
+                logger.warning(f"[Worker Control] SHUTDOWN command issued by {updated_by}: {reason}")
+
+                return WorkerCommandResponse(
+                    status="success",
+                    message="Shutdown command issued to all workers",
+                    command="shutdown",
+                    version=result["version"],
+                    timestamp=result["timestamp"].isoformat(),
+                    reason=reason,
+                    propagation=propagation
+                )
+
+            except Exception as e:
+                logger.error(f"Failed to set worker shutdown command: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Failed to issue worker shutdown: {str(e)}"
+                )
+
+        @self.app.get("/api/worker/control-state", response_model=WorkerStateResponse)
+        async def get_worker_control_state():
+            """
+            Get the current global control state for all workers.
+
+            Returns the command that all workers are currently subscribed to.
+            This shows what command is actively coordinating the workers.
+
+            Returns:
+                Current worker control state including:
+                - command: Current global command (running/pause/shutdown)
+                - version: Version number (increments on each change)
+                - timestamp: When the command was issued
+                - reason: Why the command was issued
+                - updated_by: Who issued the command
+                - watch_mode: How workers are watching (change_streams or polling)
+            """
+            if not self.agent.distributed_control:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Distributed control is not enabled on this agent"
+                )
+
+            try:
+                current = await self.agent.distributed_control.get_current_command()
+
+                if not current:
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Control state not initialized"
+                    )
+
+                watch_mode = self.agent.distributed_control.get_watch_mode()
+
+                return WorkerStateResponse(
+                    command=current["command"],
+                    version=current["version"],
+                    timestamp=current["timestamp"].isoformat(),
+                    reason=current.get("reason", ""),
+                    updated_by=current.get("updated_by", "unknown"),
+                    watch_mode=watch_mode,
+                    note="All workers are subscribed to this state"
+                )
+
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to get worker control state: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Failed to get worker state: {str(e)}"
+                )
+
+        @self.app.get("/api/worker/stats", response_model=Dict[str, Any])
+        async def get_worker_stats():
+            """
+            Get distributed control system statistics.
+
+            Returns information about how the distributed control is operating:
+            - Watch mode (Change Streams vs polling)
+            - Current global command
+            - Polling interval (if using polling)
+            - Version and timing information
+            """
+            if not self.agent.distributed_control:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Distributed control is not enabled on this agent"
+                )
+
+            try:
+                stats = await self.agent.distributed_control.get_stats()
+                return stats
+
+            except Exception as e:
+                logger.error(f"Failed to get worker stats: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Failed to get worker stats: {str(e)}"
                 )
 
 

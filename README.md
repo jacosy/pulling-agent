@@ -5,6 +5,8 @@ A robust, production-ready background job for pulling data from MongoDB collecti
 ## Features
 
 - ✅ **HTTP API endpoints** for control and monitoring (no kubectl exec required)
+- ✅ **Distributed worker control** - Control all workers at once (NEW!)
+- ✅ **MongoDB Change Streams** support for real-time coordination (NEW!)
 - ✅ Graceful shutdown handling (SIGTERM/SIGINT)
 - ✅ HTTP-based health checks for Kubernetes probes
 - ✅ Pause/resume control via API, signals, or ConfigMap
@@ -57,20 +59,26 @@ A robust, production-ready background job for pulling data from MongoDB collecti
 pulling-agent/
 ├── src/
 │   ├── __init__.py
-│   ├── agent.py           # Core PullingAgent class
-│   ├── api.py             # FastAPI endpoints for control & monitoring
-│   ├── config.py          # Configuration management
-│   ├── main.py            # Application entry point
-│   └── mongo_client.py    # MongoDB connection handling
+│   ├── agent.py                # Core PullingAgent class
+│   ├── api.py                  # FastAPI endpoints for control & monitoring
+│   ├── config.py               # Configuration management
+│   ├── distributed_control.py  # Cluster-wide coordination (NEW)
+│   ├── main.py                 # Application entry point
+│   ├── mongo_client.py         # MongoDB connection handling
+│   └── trigger_worker.py       # Document processing worker
 ├── k8s/
-│   ├── deployment.yaml    # Kubernetes Deployment + Service
-│   ├── configmap.yaml     # Control ConfigMap
-│   └── secret.yaml        # MongoDB credentials (example)
+│   ├── deployment.yaml         # Kubernetes Deployment + Service
+│   ├── configmap.yaml          # Control ConfigMap
+│   └── secret.yaml             # MongoDB credentials (example)
 ├── docs/
-│   └── API-REFERENCE.md   # API documentation
+│   ├── API-REFERENCE.md               # API documentation
+│   ├── DISTRIBUTED-CONTROL.md         # Distributed control guide (NEW)
+│   └── DISTRIBUTED-CONTROL-QUICKSTART.md  # Quick reference (NEW)
 ├── tests/
 │   ├── __init__.py
-│   └── test_agent.py      # Unit tests
+│   ├── test_agent.py           # Unit tests
+│   ├── test_distributed_control.py  # Distributed control tests (NEW)
+│   └── test_trigger_worker.py  # Worker tests
 ├── Dockerfile
 ├── requirements.txt
 ├── .dockerignore
@@ -157,6 +165,45 @@ kubectl get pods -l app=pulling-agent
 | `HEARTBEAT_INTERVAL` | No | 5 | Heartbeat update interval (seconds) |
 | `API_HOST` | No | 0.0.0.0 | API server bind address |
 | `API_PORT` | No | 8000 | API server port |
+| `ENABLE_DISTRIBUTED_CONTROL` | No | true | Enable worker-wide control coordination |
+| `ENABLE_CHANGE_STREAMS` | No | true | Use MongoDB Change Streams (requires replica set) |
+| `CONTROL_POLLING_INTERVAL` | No | 10 | Polling interval for distributed control (seconds) |
+
+## Distributed Worker Control ⭐ NEW
+
+When running multiple agent instances in a Kubernetes cluster, you can control **all workers at once** using distributed control endpoints:
+
+### Quick Start
+
+```bash
+# Pause ALL workers
+curl -X POST "http://agent-service:8000/api/worker/pause"
+
+# Resume ALL workers
+curl -X POST "http://agent-service:8000/api/worker/resume"
+
+# Check worker state
+curl http://agent-service:8000/api/worker/control-state
+```
+
+### How It Works
+
+- **Automatic mode detection** - Uses MongoDB Change Streams (real-time) if available, falls back to polling
+- **Persistent state** - Commands survive pod restarts
+- **Audit trail** - Track who changed what and when
+- **Zero configuration** - Works out of the box
+
+### Watch Modes
+
+| Mode | Latency | Requirements |
+|------|---------|--------------|
+| Change Streams (recommended) | < 1 second | MongoDB replica set |
+| Polling (fallback) | ~10 seconds | Any MongoDB |
+
+### Documentation
+
+- **[Quick Start Guide](docs/DISTRIBUTED-CONTROL-QUICKSTART.md)** - Get started in 5 minutes
+- **[Full Documentation](docs/DISTRIBUTED-CONTROL.md)** - Complete guide with examples
 
 ## Control Operations
 
