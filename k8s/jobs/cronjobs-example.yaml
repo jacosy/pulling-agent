@@ -1,13 +1,30 @@
 ---
-# CronJob to pause agent during maintenance window
+# ConfigMap-based CronJobs (Legacy/Single-Pod Method)
+#
+# NOTE: For distributed control of ALL workers, use worker-cronjobs.yaml instead.
+# This file controls individual pods via ConfigMap (requires RBAC).
+#
+# Distributed Control (Recommended):
+#   - Use: k8s/jobs/worker-cronjobs.yaml
+#   - Method: HTTP API (/api/worker/*)
+#   - Controls: ALL workers at once
+#
+# ConfigMap Control (This File):
+#   - Method: ConfigMap updates
+#   - Controls: Individual pods only
+#   - Requires: RBAC permissions
+#
+---
+# CronJob to pause agent during maintenance window (ConfigMap method)
 # Example: Pause every day at 2 AM UTC
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: pause-agent-maintenance
+  name: pause-agent-maintenance-configmap
   labels:
     app: pulling-agent-control
     operation: scheduled-pause
+    method: configmap
 spec:
   schedule: "0 2 * * *"  # Every day at 2 AM UTC
   successfulJobsHistoryLimit: 3
@@ -40,15 +57,16 @@ spec:
               echo "Agent paused at $(date)"
 
 ---
-# CronJob to resume agent after maintenance window
+# CronJob to resume agent after maintenance window (ConfigMap method)
 # Example: Resume every day at 4 AM UTC
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: resume-agent-maintenance
+  name: resume-agent-maintenance-configmap
   labels:
     app: pulling-agent-control
     operation: scheduled-resume
+    method: configmap
 spec:
   schedule: "0 4 * * *"  # Every day at 4 AM UTC
   successfulJobsHistoryLimit: 3
@@ -81,14 +99,15 @@ spec:
               echo "Agent resumed at $(date)"
 
 ---
-# Example: Pause during business hours, resume outside business hours
+# Example: Pause during business hours, resume outside business hours (ConfigMap method)
 # Pause at 9 AM on weekdays
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: pause-agent-business-hours
+  name: pause-agent-business-hours-configmap
   labels:
     app: pulling-agent-control
+    method: configmap
 spec:
   schedule: "0 9 * * 1-5"  # 9 AM, Monday-Friday
   jobTemplate:
@@ -109,13 +128,14 @@ spec:
                 -o yaml --dry-run=client | kubectl apply -f -
 
 ---
-# Resume at 6 PM on weekdays
+# Resume at 6 PM on weekdays (ConfigMap method)
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: resume-agent-off-hours
+  name: resume-agent-off-hours-configmap
   labels:
     app: pulling-agent-control
+    method: configmap
 spec:
   schedule: "0 18 * * 1-5"  # 6 PM, Monday-Friday
   jobTemplate:

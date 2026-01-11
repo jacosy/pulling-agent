@@ -1,0 +1,160 @@
+---
+# Job to pause all workers using HTTP API
+# This is the RECOMMENDED method for distributed worker control
+# Usage: kubectl apply -f k8s/jobs/worker-control-jobs.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pause-all-workers
+  labels:
+    app: pulling-agent-control
+    operation: pause
+    method: http-api
+spec:
+  ttlSecondsAfterFinished: 300  # Auto-delete after 5 minutes
+  template:
+    metadata:
+      labels:
+        app: pulling-agent-control
+        operation: pause
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: pause-workers
+        image: curlimages/curl:latest
+        command:
+        - sh
+        - -c
+        - |
+          echo "Pausing all workers via HTTP API..."
+          curl -X POST "http://pulling-agent-service:8000/api/worker/pause?reason=Manual+pause&updated_by=k8s_job"
+          echo ""
+          echo "Pause command issued. Checking status..."
+          sleep 2
+          curl -s http://pulling-agent-service:8000/api/worker/control-state | grep -o '"command":"[^"]*"'
+          echo ""
+          echo "Done. All workers should pause within seconds."
+
+---
+# Job to resume all workers using HTTP API
+# Usage: kubectl apply -f k8s/jobs/worker-control-jobs.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: resume-all-workers
+  labels:
+    app: pulling-agent-control
+    operation: resume
+    method: http-api
+spec:
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        app: pulling-agent-control
+        operation: resume
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: resume-workers
+        image: curlimages/curl:latest
+        command:
+        - sh
+        - -c
+        - |
+          echo "Resuming all workers via HTTP API..."
+          curl -X POST "http://pulling-agent-service:8000/api/worker/resume?reason=Manual+resume&updated_by=k8s_job"
+          echo ""
+          echo "Resume command issued. Checking status..."
+          sleep 2
+          curl -s http://pulling-agent-service:8000/api/worker/control-state | grep -o '"command":"[^"]*"'
+          echo ""
+          echo "Done. All workers should resume within seconds."
+
+---
+# Job to check worker control state
+# Usage: kubectl apply -f k8s/jobs/worker-control-jobs.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: check-worker-state
+  labels:
+    app: pulling-agent-control
+    operation: status
+    method: http-api
+spec:
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        app: pulling-agent-control
+        operation: status
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: check-state
+        image: curlimages/curl:latest
+        command:
+        - sh
+        - -c
+        - |
+          echo "=== Worker Control State ==="
+          curl -s http://pulling-agent-service:8000/api/worker/control-state
+          echo ""
+          echo ""
+          echo "=== Worker Control Stats ==="
+          curl -s http://pulling-agent-service:8000/api/worker/stats
+          echo ""
+
+---
+# Job to pause all workers with custom reason
+# Usage: kubectl create job pause-for-maintenance --from=job/pause-workers-custom
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pause-workers-custom
+  labels:
+    app: pulling-agent-control
+    operation: pause
+    method: http-api
+spec:
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        app: pulling-agent-control
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: pause-workers
+        image: curlimages/curl:latest
+        env:
+        - name: REASON
+          value: "Scheduled maintenance"
+        - name: UPDATED_BY
+          value: "k8s_admin"
+        command:
+        - sh
+        - -c
+        - |
+          echo "Pausing all workers: $REASON"
+          REASON_ENCODED=$(echo "$REASON" | sed 's/ /+/g')
+          curl -X POST "http://pulling-agent-service:8000/api/worker/pause?reason=$REASON_ENCODED&updated_by=$UPDATED_BY"
+          echo ""
+          echo "Pause command issued successfully."
+
+---
+# Note: HTTP API method advantages over ConfigMap:
+#
+# ✅ Controls ALL workers at once (distributed)
+# ✅ Sub-second propagation (Change Streams) or ~10s (polling)
+# ✅ Persistent state survives pod restarts
+# ✅ Full audit trail (version, timestamp, reason, updated_by)
+# ✅ No RBAC permissions needed (uses Service)
+# ✅ Works across multiple pods/replicas
+#
+# ConfigMap method (see control-jobs.yaml):
+# - Controls single pod only
+# - Requires RBAC permissions
+# - No version tracking
+# - Use for single-pod control or when HTTP API unavailable

@@ -1,13 +1,32 @@
 ---
-# Job to pause the agent
-# Usage: kubectl apply -f k8s/jobs/pause-agent.yaml
+# ConfigMap-based control jobs (Legacy/Single-Pod Method)
+#
+# NOTE: For distributed control of ALL workers, use worker-control-jobs.yaml instead.
+# This file controls individual pods via ConfigMap (requires RBAC).
+#
+# Distributed Control (Recommended):
+#   - Use: k8s/jobs/worker-control-jobs.yaml
+#   - Method: HTTP API (/api/worker/*)
+#   - Controls: ALL workers at once
+#   - Requires: No RBAC, just Service access
+#
+# ConfigMap Control (This File):
+#   - Method: ConfigMap updates
+#   - Controls: Individual pods only
+#   - Requires: RBAC permissions
+#   - Use case: Single-pod control or HTTP API unavailable
+#
+---
+# Job to pause the agent via ConfigMap
+# Usage: kubectl apply -f k8s/jobs/control-jobs.yaml
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: pause-pulling-agent
+  name: pause-pulling-agent-configmap
   labels:
     app: pulling-agent-control
     operation: pause
+    method: configmap
 spec:
   ttlSecondsAfterFinished: 300  # Auto-delete after 5 minutes
   template:
@@ -35,15 +54,16 @@ spec:
           echo "Done. Check agent logs to verify pause."
 
 ---
-# Job to resume the agent
-# Usage: kubectl apply -f k8s/jobs/resume-agent.yaml
+# Job to resume the agent via ConfigMap
+# Usage: kubectl apply -f k8s/jobs/control-jobs.yaml
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: resume-pulling-agent
+  name: resume-pulling-agent-configmap
   labels:
     app: pulling-agent-control
     operation: resume
+    method: configmap
 spec:
   ttlSecondsAfterFinished: 300
   template:

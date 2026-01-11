@@ -1,0 +1,230 @@
+---
+# CronJob to pause all workers during maintenance window
+# Uses HTTP API for distributed worker control (RECOMMENDED)
+# Example: Pause every day at 2 AM UTC
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: pause-workers-maintenance
+  labels:
+    app: pulling-agent-control
+    operation: scheduled-pause
+    method: http-api
+spec:
+  schedule: "0 2 * * *"  # Every day at 2 AM UTC
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    metadata:
+      labels:
+        app: pulling-agent-control
+        operation: pause
+    spec:
+      ttlSecondsAfterFinished: 3600  # Delete after 1 hour
+      template:
+        metadata:
+          labels:
+            app: pulling-agent-control
+        spec:
+          restartPolicy: Never
+          containers:
+          - name: pause-workers
+            image: curlimages/curl:latest
+            command:
+            - sh
+            - -c
+            - |
+              echo "=== Scheduled Pause: Maintenance Window Started ==="
+              echo "Time: $(date)"
+              echo "Pausing all workers..."
+
+              curl -X POST "http://pulling-agent-service:8000/api/worker/pause?reason=Nightly+maintenance+window&updated_by=cronjob"
+
+              echo ""
+              echo "Pause command issued. Workers will pause within seconds."
+              echo "Check status: curl http://pulling-agent-service:8000/api/worker/control-state"
+
+---
+# CronJob to resume all workers after maintenance window
+# Example: Resume every day at 4 AM UTC
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: resume-workers-maintenance
+  labels:
+    app: pulling-agent-control
+    operation: scheduled-resume
+    method: http-api
+spec:
+  schedule: "0 4 * * *"  # Every day at 4 AM UTC
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    metadata:
+      labels:
+        app: pulling-agent-control
+        operation: resume
+    spec:
+      ttlSecondsAfterFinished: 3600
+      template:
+        metadata:
+          labels:
+            app: pulling-agent-control
+        spec:
+          restartPolicy: Never
+          containers:
+          - name: resume-workers
+            image: curlimages/curl:latest
+            command:
+            - sh
+            - -c
+            - |
+              echo "=== Scheduled Resume: Maintenance Window Ended ==="
+              echo "Time: $(date)"
+              echo "Resuming all workers..."
+
+              curl -X POST "http://pulling-agent-service:8000/api/worker/resume?reason=Maintenance+complete&updated_by=cronjob"
+
+              echo ""
+              echo "Resume command issued. Workers will resume within seconds."
+              echo "Check status: curl http://pulling-agent-service:8000/api/worker/control-state"
+
+---
+# CronJob to pause workers during business hours
+# Pause at 9 AM on weekdays
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: pause-workers-business-hours
+  labels:
+    app: pulling-agent-control
+    operation: scheduled-pause
+    method: http-api
+spec:
+  schedule: "0 9 * * 1-5"  # 9 AM, Monday-Friday
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+          - name: pause-workers
+            image: curlimages/curl:latest
+            command:
+            - sh
+            - -c
+            - |
+              echo "Pausing workers during business hours (9 AM weekdays)..."
+              curl -X POST "http://pulling-agent-service:8000/api/worker/pause?reason=Business+hours+started&updated_by=business_hours_cronjob"
+              echo ""
+              echo "Workers paused."
+
+---
+# CronJob to resume workers outside business hours
+# Resume at 6 PM on weekdays
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: resume-workers-off-hours
+  labels:
+    app: pulling-agent-control
+    operation: scheduled-resume
+    method: http-api
+spec:
+  schedule: "0 18 * * 1-5"  # 6 PM, Monday-Friday
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+          - name: resume-workers
+            image: curlimages/curl:latest
+            command:
+            - sh
+            - -c
+            - |
+              echo "Resuming workers outside business hours (6 PM weekdays)..."
+              curl -X POST "http://pulling-agent-service:8000/api/worker/resume?reason=Business+hours+ended&updated_by=business_hours_cronjob"
+              echo ""
+              echo "Workers resumed."
+
+---
+# CronJob to check worker health every 30 minutes
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: check-worker-health
+  labels:
+    app: pulling-agent-control
+    operation: health-check
+    method: http-api
+spec:
+  schedule: "*/30 * * * *"  # Every 30 minutes
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+          - name: health-check
+            image: curlimages/curl:latest
+            command:
+            - sh
+            - -c
+            - |
+              echo "=== Worker Health Check ($(date)) ==="
+
+              # Check control state
+              echo "Control State:"
+              STATE=$(curl -s http://pulling-agent-service:8000/api/worker/control-state)
+              echo "$STATE"
+
+              # Extract command and check if unexpected
+              COMMAND=$(echo "$STATE" | grep -o '"command":"[^"]*"' | cut -d'"' -f4)
+              echo ""
+              echo "Current command: $COMMAND"
+
+              # Optional: Alert if workers are paused unexpectedly
+              if [ "$COMMAND" = "pause" ]; then
+                echo "⚠️  WARNING: Workers are currently PAUSED"
+                echo "Check reason: curl http://pulling-agent-service:8000/api/worker/control-state"
+              else
+                echo "✓ Workers are running normally"
+              fi
+
+---
+# Notes:
+#
+# HTTP API Method (RECOMMENDED for distributed control):
+# ✅ Controls ALL workers at once
+# ✅ Sub-second propagation via MongoDB Change Streams
+# ✅ Persistent state (survives pod restarts)
+# ✅ Full audit trail (version, reason, updated_by)
+# ✅ No RBAC permissions needed
+# ✅ Works with multiple replicas
+#
+# Schedule Format: "minute hour day month day-of-week"
+# Common patterns:
+#   - "0 2 * * *"       - Every day at 2 AM
+#   - "0 9 * * 1-5"     - Weekdays at 9 AM
+#   - "*/30 * * * *"    - Every 30 minutes
+#   - "0 */4 * * *"     - Every 4 hours
+#   - "0 0 * * 0"       - Every Sunday at midnight
+#
+# Timezone: All CronJobs use UTC timezone
+#
+# Service Name:
+# - Update "pulling-agent-service" to match your Service name
+# - Default assumes Service created by k8s/deployment.yaml
+#
+# Testing:
+# - Create one-time job: kubectl create job test-pause --from=cronjob/pause-workers-maintenance
+# - View logs: kubectl logs job/test-pause
+# - Check state: kubectl exec -it deployment/pulling-agent -- curl localhost:8000/api/worker/control-state
