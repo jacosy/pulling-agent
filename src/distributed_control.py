@@ -1,7 +1,7 @@
 """
-Distributed Control Coordinator for Multi-Agent Systems
+Distributed Control Coordinator for Multi-Worker Systems
 
-Provides two methods for coordinating control commands across multiple agents:
+Provides two methods for coordinating control commands across multiple workers:
 1. MongoDB Change Streams (recommended, event-driven, requires replica set)
 2. Polling fallback (for single-node MongoDB, configurable interval)
 
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 class DistributedControlCoordinator:
     """
-    Coordinates agent control across multiple instances.
+    Coordinates worker control across multiple instances.
 
     Supports two watch modes:
     - Change Streams: Event-driven, real-time (requires MongoDB replica set)
@@ -88,7 +88,7 @@ class DistributedControlCoordinator:
         updated_by: str = "api"
     ) -> dict:
         """
-        Set command for all agents in the cluster.
+        Set command for all workers.
 
         Args:
             command: One of "running", "pause", "shutdown"

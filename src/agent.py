@@ -106,7 +106,7 @@ class PullingAgent:
         Called by MongoDB Change Stream or polling mechanism.
         """
         logger.info(
-            f"[Distributed Control] Processing global command: {command} "
+            f"[Worker Control] Processing global command: {command} "
             f"(version {document['version']}, reason: {document.get('reason', 'N/A')})"
         )
 
@@ -117,7 +117,7 @@ class PullingAgent:
         elif command == "shutdown":
             await self.shutdown()
         else:
-            logger.warning(f"[Distributed Control] Unknown command received: {command}")
+            logger.warning(f"[Worker Control] Unknown command received: {command}")
 
     async def _sync_initial_distributed_state(self) -> None:
         """
@@ -131,16 +131,16 @@ class PullingAgent:
         if current:
             command = current["command"]
             logger.info(
-                f"[Distributed Control] Initial global state: {command} "
+                f"[Worker Control] Initial global state: {command} "
                 f"(version {current['version']})"
             )
 
             # Apply initial state
             if command == "pause" and self.state == AgentState.RUNNING:
-                logger.info("[Distributed Control] Syncing to paused state on startup")
+                logger.info("[Worker Control] Syncing to paused state on startup")
                 self.pause()
             elif command == "running" and self.state == AgentState.PAUSED:
-                logger.info("[Distributed Control] Syncing to running state on startup")
+                logger.info("[Worker Control] Syncing to running state on startup")
                 self.resume()
     
     async def run(self) -> None:
@@ -154,7 +154,7 @@ class PullingAgent:
 
         # Initialize distributed control if enabled
         if self.distributed_control:
-            logger.info("[Distributed Control] Initializing cluster coordination")
+            logger.info("[Worker Control] Initializing cluster coordination")
             await self.distributed_control.initialize()
             await self._sync_initial_distributed_state()
 
@@ -163,7 +163,7 @@ class PullingAgent:
                 self._on_distributed_control_command
             )
             logger.info(
-                f"[Distributed Control] Started watching "
+                f"[Worker Control] Started watching "
                 f"(mode will be auto-detected: Change Streams or Polling)"
             )
 
@@ -209,7 +209,7 @@ class PullingAgent:
 
             # Stop distributed control watcher
             if self.distributed_control:
-                logger.info("[Distributed Control] Stopping watch task")
+                logger.info("[Worker Control] Stopping watch task")
                 await self.distributed_control.stop_watching()
 
             # Cancel background tasks

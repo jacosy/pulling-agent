@@ -51,8 +51,8 @@ class MessageResponse(BaseModel):
     message: str
     state: Optional[str] = None
 
-class ClusterCommandResponse(BaseModel):
-    """Cluster command response"""
+class WorkerCommandResponse(BaseModel):
+    """Worker command response"""
     status: str
     message: str
     command: str
@@ -61,8 +61,8 @@ class ClusterCommandResponse(BaseModel):
     reason: str
     propagation: str
 
-class ClusterStateResponse(BaseModel):
-    """Cluster control state response"""
+class WorkerStateResponse(BaseModel):
+    """Worker control state response"""
     command: str
     version: int
     timestamp: str
@@ -303,15 +303,15 @@ class AgentAPI:
                     detail=f"MongoDB connection error: {str(e)}"
                 )
 
-        # ========== CLUSTER CONTROL ENDPOINTS ==========
-        # These endpoints control ALL agents in the cluster via distributed coordination
+        # ========== WORKER CONTROL ENDPOINTS ==========
+        # These endpoints control ALL workers via distributed coordination
 
-        @self.app.post("/api/cluster/pause", response_model=ClusterCommandResponse)
-        async def pause_all_agents(reason: str = "Manual cluster pause", updated_by: str = "api_user"):
+        @self.app.post("/api/worker/pause", response_model=WorkerCommandResponse)
+        async def pause_all_workers(reason: str = "Manual worker pause", updated_by: str = "api_user"):
             """
-            Pause ALL agents in the cluster.
+            Pause ALL workers.
 
-            This uses MongoDB-based distributed control to coordinate all agent instances.
+            This uses MongoDB-based distributed control to coordinate all worker instances.
             The command is propagated via:
             - MongoDB Change Streams (event-driven, sub-second latency) if available, OR
             - Polling (configurable interval, default 10s) as fallback
@@ -324,8 +324,8 @@ class AgentAPI:
                 Command acknowledgment with version number
 
             Note:
-                - All agents will pause after completing their current batch
-                - Agents will receive the command within seconds
+                - All workers will pause after completing their current batch
+                - Workers will receive the command within seconds
                 - Command survives pod restarts
             """
             if not self.agent.distributed_control:
@@ -343,16 +343,16 @@ class AgentAPI:
 
                 watch_mode = self.agent.distributed_control.get_watch_mode()
                 propagation = (
-                    "Agents will pause within seconds (event-driven via Change Streams)"
+                    "Workers will pause within seconds (event-driven via Change Streams)"
                     if watch_mode == "change_streams"
-                    else f"Agents will pause within {self.agent.config.control_polling_interval}s (polling mode)"
+                    else f"Workers will pause within {self.agent.config.control_polling_interval}s (polling mode)"
                 )
 
-                logger.info(f"[Cluster Control] Pause command issued by {updated_by}: {reason}")
+                logger.info(f"[Worker Control] Pause command issued by {updated_by}: {reason}")
 
-                return ClusterCommandResponse(
+                return WorkerCommandResponse(
                     status="success",
-                    message="Pause command issued to all agents in the cluster",
+                    message="Pause command issued to all workers",
                     command="pause",
                     version=result["version"],
                     timestamp=result["timestamp"].isoformat(),
@@ -361,18 +361,18 @@ class AgentAPI:
                 )
 
             except Exception as e:
-                logger.error(f"Failed to set cluster pause command: {e}")
+                logger.error(f"Failed to set worker pause command: {e}")
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Failed to issue cluster pause: {str(e)}"
+                    detail=f"Failed to issue worker pause: {str(e)}"
                 )
 
-        @self.app.post("/api/cluster/resume", response_model=ClusterCommandResponse)
-        async def resume_all_agents(reason: str = "Manual cluster resume", updated_by: str = "api_user"):
+        @self.app.post("/api/worker/resume", response_model=WorkerCommandResponse)
+        async def resume_all_workers(reason: str = "Manual worker resume", updated_by: str = "api_user"):
             """
-            Resume ALL agents in the cluster.
+            Resume ALL workers.
 
-            This uses MongoDB-based distributed control to coordinate all agent instances.
+            This uses MongoDB-based distributed control to coordinate all worker instances.
             The command is propagated via:
             - MongoDB Change Streams (event-driven, sub-second latency) if available, OR
             - Polling (configurable interval, default 10s) as fallback
@@ -385,8 +385,8 @@ class AgentAPI:
                 Command acknowledgment with version number
 
             Note:
-                - All agents will resume processing immediately
-                - Agents will receive the command within seconds
+                - All workers will resume processing immediately
+                - Workers will receive the command within seconds
                 - Command survives pod restarts
             """
             if not self.agent.distributed_control:
@@ -404,16 +404,16 @@ class AgentAPI:
 
                 watch_mode = self.agent.distributed_control.get_watch_mode()
                 propagation = (
-                    "Agents will resume within seconds (event-driven via Change Streams)"
+                    "Workers will resume within seconds (event-driven via Change Streams)"
                     if watch_mode == "change_streams"
-                    else f"Agents will resume within {self.agent.config.control_polling_interval}s (polling mode)"
+                    else f"Workers will resume within {self.agent.config.control_polling_interval}s (polling mode)"
                 )
 
-                logger.info(f"[Cluster Control] Resume command issued by {updated_by}: {reason}")
+                logger.info(f"[Worker Control] Resume command issued by {updated_by}: {reason}")
 
-                return ClusterCommandResponse(
+                return WorkerCommandResponse(
                     status="success",
-                    message="Resume command issued to all agents in the cluster",
+                    message="Resume command issued to all workers",
                     command="running",
                     version=result["version"],
                     timestamp=result["timestamp"].isoformat(),
@@ -422,18 +422,18 @@ class AgentAPI:
                 )
 
             except Exception as e:
-                logger.error(f"Failed to set cluster resume command: {e}")
+                logger.error(f"Failed to set worker resume command: {e}")
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Failed to issue cluster resume: {str(e)}"
+                    detail=f"Failed to issue worker resume: {str(e)}"
                 )
 
-        @self.app.post("/api/cluster/shutdown", response_model=ClusterCommandResponse)
-        async def shutdown_all_agents(reason: str = "Manual cluster shutdown", updated_by: str = "api_user"):
+        @self.app.post("/api/worker/shutdown", response_model=WorkerCommandResponse)
+        async def shutdown_all_workers(reason: str = "Manual worker shutdown", updated_by: str = "api_user"):
             """
-            Gracefully shutdown ALL agents in the cluster.
+            Gracefully shutdown ALL workers.
 
-            This uses MongoDB-based distributed control to coordinate all agent instances.
+            This uses MongoDB-based distributed control to coordinate all worker instances.
             The command is propagated via:
             - MongoDB Change Streams (event-driven, sub-second latency) if available, OR
             - Polling (configurable interval, default 10s) as fallback
@@ -446,7 +446,7 @@ class AgentAPI:
                 Command acknowledgment with version number
 
             Warning:
-                This will shutdown ALL agents in the cluster. Use with caution!
+                This will shutdown ALL workers. Use with caution!
             """
             if not self.agent.distributed_control:
                 raise HTTPException(
@@ -463,16 +463,16 @@ class AgentAPI:
 
                 watch_mode = self.agent.distributed_control.get_watch_mode()
                 propagation = (
-                    "Agents will shutdown gracefully within seconds (event-driven via Change Streams)"
+                    "Workers will shutdown gracefully within seconds (event-driven via Change Streams)"
                     if watch_mode == "change_streams"
-                    else f"Agents will shutdown within {self.agent.config.control_polling_interval}s (polling mode)"
+                    else f"Workers will shutdown within {self.agent.config.control_polling_interval}s (polling mode)"
                 )
 
-                logger.warning(f"[Cluster Control] SHUTDOWN command issued by {updated_by}: {reason}")
+                logger.warning(f"[Worker Control] SHUTDOWN command issued by {updated_by}: {reason}")
 
-                return ClusterCommandResponse(
+                return WorkerCommandResponse(
                     status="success",
-                    message="Shutdown command issued to all agents in the cluster",
+                    message="Shutdown command issued to all workers",
                     command="shutdown",
                     version=result["version"],
                     timestamp=result["timestamp"].isoformat(),
@@ -481,28 +481,28 @@ class AgentAPI:
                 )
 
             except Exception as e:
-                logger.error(f"Failed to set cluster shutdown command: {e}")
+                logger.error(f"Failed to set worker shutdown command: {e}")
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Failed to issue cluster shutdown: {str(e)}"
+                    detail=f"Failed to issue worker shutdown: {str(e)}"
                 )
 
-        @self.app.get("/api/cluster/control-state", response_model=ClusterStateResponse)
-        async def get_cluster_control_state():
+        @self.app.get("/api/worker/control-state", response_model=WorkerStateResponse)
+        async def get_worker_control_state():
             """
-            Get the current global control state for the cluster.
+            Get the current global control state for all workers.
 
-            Returns the command that all agents are currently subscribed to.
-            This shows what command is actively coordinating the cluster.
+            Returns the command that all workers are currently subscribed to.
+            This shows what command is actively coordinating the workers.
 
             Returns:
-                Current cluster control state including:
+                Current worker control state including:
                 - command: Current global command (running/pause/shutdown)
                 - version: Version number (increments on each change)
                 - timestamp: When the command was issued
                 - reason: Why the command was issued
                 - updated_by: Who issued the command
-                - watch_mode: How agents are watching (change_streams or polling)
+                - watch_mode: How workers are watching (change_streams or polling)
             """
             if not self.agent.distributed_control:
                 raise HTTPException(
@@ -521,27 +521,27 @@ class AgentAPI:
 
                 watch_mode = self.agent.distributed_control.get_watch_mode()
 
-                return ClusterStateResponse(
+                return WorkerStateResponse(
                     command=current["command"],
                     version=current["version"],
                     timestamp=current["timestamp"].isoformat(),
                     reason=current.get("reason", ""),
                     updated_by=current.get("updated_by", "unknown"),
                     watch_mode=watch_mode,
-                    note="All agents in the cluster are subscribed to this state"
+                    note="All workers are subscribed to this state"
                 )
 
             except HTTPException:
                 raise
             except Exception as e:
-                logger.error(f"Failed to get cluster control state: {e}")
+                logger.error(f"Failed to get worker control state: {e}")
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Failed to get cluster state: {str(e)}"
+                    detail=f"Failed to get worker state: {str(e)}"
                 )
 
-        @self.app.get("/api/cluster/stats", response_model=Dict[str, Any])
-        async def get_cluster_stats():
+        @self.app.get("/api/worker/stats", response_model=Dict[str, Any])
+        async def get_worker_stats():
             """
             Get distributed control system statistics.
 
@@ -562,10 +562,10 @@ class AgentAPI:
                 return stats
 
             except Exception as e:
-                logger.error(f"Failed to get cluster stats: {e}")
+                logger.error(f"Failed to get worker stats: {e}")
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Failed to get cluster stats: {str(e)}"
+                    detail=f"Failed to get worker stats: {str(e)}"
                 )
 
 

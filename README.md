@@ -5,7 +5,7 @@ A robust, production-ready background job for pulling data from MongoDB collecti
 ## Features
 
 - ✅ **HTTP API endpoints** for control and monitoring (no kubectl exec required)
-- ✅ **Distributed cluster control** - Control all agents at once (NEW!)
+- ✅ **Distributed worker control** - Control all workers at once (NEW!)
 - ✅ **MongoDB Change Streams** support for real-time coordination (NEW!)
 - ✅ Graceful shutdown handling (SIGTERM/SIGINT)
 - ✅ HTTP-based health checks for Kubernetes probes
@@ -165,25 +165,25 @@ kubectl get pods -l app=pulling-agent
 | `HEARTBEAT_INTERVAL` | No | 5 | Heartbeat update interval (seconds) |
 | `API_HOST` | No | 0.0.0.0 | API server bind address |
 | `API_PORT` | No | 8000 | API server port |
-| `ENABLE_DISTRIBUTED_CONTROL` | No | true | Enable cluster-wide control coordination |
+| `ENABLE_DISTRIBUTED_CONTROL` | No | true | Enable worker-wide control coordination |
 | `ENABLE_CHANGE_STREAMS` | No | true | Use MongoDB Change Streams (requires replica set) |
 | `CONTROL_POLLING_INTERVAL` | No | 10 | Polling interval for distributed control (seconds) |
 
-## Distributed Cluster Control ⭐ NEW
+## Distributed Worker Control ⭐ NEW
 
-When running multiple agent instances in a Kubernetes cluster, you can control **all agents at once** using distributed control endpoints:
+When running multiple agent instances in a Kubernetes cluster, you can control **all workers at once** using distributed control endpoints:
 
 ### Quick Start
 
 ```bash
-# Pause ALL agents in the cluster
-curl -X POST "http://agent-service:8000/api/cluster/pause"
+# Pause ALL workers
+curl -X POST "http://agent-service:8000/api/worker/pause"
 
-# Resume ALL agents in the cluster
-curl -X POST "http://agent-service:8000/api/cluster/resume"
+# Resume ALL workers
+curl -X POST "http://agent-service:8000/api/worker/resume"
 
-# Check cluster state
-curl http://agent-service:8000/api/cluster/control-state
+# Check worker state
+curl http://agent-service:8000/api/worker/control-state
 ```
 
 ### How It Works

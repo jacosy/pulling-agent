@@ -12,8 +12,8 @@
 ### Prerequisites
 
 1. **Kubernetes cluster** (v1.24+)
-2. **kubectl** configured to access your cluster
-3. **MongoDB** instance accessible from the cluster
+2. **kubectl** configured to access your worker
+3. **MongoDB** instance accessible from the worker
 4. **Docker** for building images
 
 ### Initial Setup

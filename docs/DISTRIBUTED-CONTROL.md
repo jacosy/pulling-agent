@@ -1,4 +1,4 @@
-# Distributed Control for Multi-Agent Clusters
+# Distributed Control for Multi-Agent Workers
 
 This document describes the distributed control system for coordinating multiple pulling agent instances running in a Kubernetes cluster.
 
@@ -6,7 +6,7 @@ This document describes the distributed control system for coordinating multiple
 
 When multiple pulling agents run simultaneously in a K8s cluster, you need a way to control all of them at once. The distributed control system provides:
 
-- **Cluster-wide pause/resume/shutdown** - Control all agents with a single command
+- **Worker-wide pause/resume/shutdown** - Control all agents with a single command
 - **Two watch modes** - MongoDB Change Streams (real-time) or polling (fallback)
 - **Automatic mode detection** - System chooses the best available method
 - **Audit trail** - Track who changed what and when
@@ -16,7 +16,7 @@ When multiple pulling agents run simultaneously in a K8s cluster, you need a way
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│           Kubernetes Cluster                         │
+│           Kubernetes Worker                         │
 │                                                      │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐          │
 │  │ Agent 1  │  │ Agent 2  │  │ Agent N  │          │
@@ -43,7 +43,7 @@ When multiple pulling agents run simultaneously in a K8s cluster, you need a way
             │ }                   │
             └─────────────────────┘
                       ↑
-            POST /api/cluster/pause
+            POST /api/worker/pause
          (Control command from any pod)
 ```
 
@@ -118,19 +118,19 @@ You'll see log messages indicating which mode was selected:
 
 ## API Endpoints
 
-All cluster control endpoints are available at `/api/cluster/*`:
+All worker control endpoints are available at `/api/worker/*`:
 
 ### Pause All Agents
 
 ```bash
-curl -X POST "http://any-agent:8000/api/cluster/pause?reason=Maintenance+window&updated_by=ops_team"
+curl -X POST "http://any-agent:8000/api/worker/pause?reason=Maintenance+window&updated_by=ops_team"
 ```
 
 **Response:**
 ```json
 {
   "status": "success",
-  "message": "Pause command issued to all agents in the cluster",
+  "message": "Pause command issued to all agents in the worker",
   "command": "pause",
   "version": 42,
   "timestamp": "2026-01-11T10:30:00.123456",
@@ -148,14 +148,14 @@ curl -X POST "http://any-agent:8000/api/cluster/pause?reason=Maintenance+window&
 ### Resume All Agents
 
 ```bash
-curl -X POST "http://any-agent:8000/api/cluster/resume?reason=Maintenance+complete&updated_by=ops_team"
+curl -X POST "http://any-agent:8000/api/worker/resume?reason=Maintenance+complete&updated_by=ops_team"
 ```
 
 **Response:**
 ```json
 {
   "status": "success",
-  "message": "Resume command issued to all agents in the cluster",
+  "message": "Resume command issued to all agents in the worker",
   "command": "running",
   "version": 43,
   "timestamp": "2026-01-11T12:00:00.123456",
@@ -173,14 +173,14 @@ curl -X POST "http://any-agent:8000/api/cluster/resume?reason=Maintenance+comple
 ### Shutdown All Agents
 
 ```bash
-curl -X POST "http://any-agent:8000/api/cluster/shutdown?reason=Emergency+stop&updated_by=admin"
+curl -X POST "http://any-agent:8000/api/worker/shutdown?reason=Emergency+stop&updated_by=admin"
 ```
 
 **Response:**
 ```json
 {
   "status": "success",
-  "message": "Shutdown command issued to all agents in the cluster",
+  "message": "Shutdown command issued to all agents in the worker",
   "command": "shutdown",
   "version": 44,
   "timestamp": "2026-01-11T15:00:00.123456",
@@ -189,12 +189,12 @@ curl -X POST "http://any-agent:8000/api/cluster/shutdown?reason=Emergency+stop&u
 }
 ```
 
-**Warning:** This shuts down **ALL** agents in the cluster. Use with caution!
+**Warning:** This shuts down **ALL** agents in the worker. Use with caution!
 
-### Check Cluster State
+### Check Worker State
 
 ```bash
-curl http://any-agent:8000/api/cluster/control-state
+curl http://any-agent:8000/api/worker/control-state
 ```
 
 **Response:**
@@ -206,14 +206,14 @@ curl http://any-agent:8000/api/cluster/control-state
   "reason": "Maintenance window",
   "updated_by": "ops_team",
   "watch_mode": "change_streams",
-  "note": "All agents in the cluster are subscribed to this state"
+  "note": "All agents in the worker are subscribed to this state"
 }
 ```
 
-### Get Cluster Statistics
+### Get Worker Statistics
 
 ```bash
-curl http://any-agent:8000/api/cluster/stats
+curl http://any-agent:8000/api/worker/stats
 ```
 
 **Response:**
@@ -239,7 +239,7 @@ curl http://any-agent:8000/api/cluster/stats
 
 # Pause all agents
 echo "Pausing all agents for maintenance..."
-curl -X POST "http://agent-service:8000/api/cluster/pause?reason=Deploying+new+version&updated_by=deploy_script"
+curl -X POST "http://agent-service:8000/api/worker/pause?reason=Deploying+new+version&updated_by=deploy_script"
 
 # Wait for all pods to pause
 sleep 15
@@ -252,7 +252,7 @@ kubectl rollout status deployment/pulling-agent
 
 # Resume all agents
 echo "Resuming all agents..."
-curl -X POST "http://agent-service:8000/api/cluster/resume?reason=Deployment+complete&updated_by=deploy_script"
+curl -X POST "http://agent-service:8000/api/worker/resume?reason=Deployment+complete&updated_by=deploy_script"
 
 echo "Maintenance complete!"
 ```
@@ -261,13 +261,13 @@ echo "Maintenance complete!"
 
 ```bash
 # Immediately pause all agents (e.g., detected data issue)
-curl -X POST "http://agent-service:8000/api/cluster/pause?reason=Data+integrity+issue+detected&updated_by=monitoring_system"
+curl -X POST "http://agent-service:8000/api/worker/pause?reason=Data+integrity+issue+detected&updated_by=monitoring_system"
 
 # Check current state
-curl http://agent-service:8000/api/cluster/control-state
+curl http://agent-service:8000/api/worker/control-state
 
 # Resume after issue resolved
-curl -X POST "http://agent-service:8000/api/cluster/resume?reason=Issue+resolved&updated_by=admin"
+curl -X POST "http://agent-service:8000/api/worker/resume?reason=Issue+resolved&updated_by=admin"
 ```
 
 ### Example 3: Kubernetes CronJob Control
@@ -291,7 +291,7 @@ spec:
             - sh
             - -c
             - |
-              curl -X POST "http://pulling-agent-service:8000/api/cluster/pause?reason=Nightly+maintenance+window&updated_by=cronjob"
+              curl -X POST "http://pulling-agent-service:8000/api/worker/pause?reason=Nightly+maintenance+window&updated_by=cronjob"
           restartPolicy: OnFailure
 ---
 apiVersion: batch/v1
@@ -311,32 +311,32 @@ spec:
             - sh
             - -c
             - |
-              curl -X POST "http://pulling-agent-service:8000/api/cluster/resume?reason=Maintenance+window+complete&updated_by=cronjob"
+              curl -X POST "http://pulling-agent-service:8000/api/worker/resume?reason=Maintenance+window+complete&updated_by=cronjob"
           restartPolicy: OnFailure
 ```
 
 ### Example 4: Monitoring with Prometheus
 
 ```python
-# monitoring/cluster_status_exporter.py
+# monitoring/worker_status_exporter.py
 import time
 import requests
 from prometheus_client import start_http_server, Gauge
 
 # Metrics
-cluster_state = Gauge('agent_cluster_state', 'Current cluster control state', ['command'])
-cluster_version = Gauge('agent_cluster_version', 'Current cluster control version')
+worker_state = Gauge('agent_worker_state', 'Current worker control state', ['command'])
+worker_version = Gauge('agent_worker_version', 'Current worker control version')
 
 def collect_metrics():
-    """Collect cluster state metrics"""
+    """Collect worker state metrics"""
     try:
-        response = requests.get('http://agent-service:8000/api/cluster/control-state')
+        response = requests.get('http://agent-service:8000/api/worker/control-state')
         data = response.json()
 
         # Update metrics
         command = data['command']
-        cluster_state.labels(command=command).set(1)
-        cluster_version.set(data['version'])
+        worker_state.labels(command=command).set(1)
+        worker_version.set(data['version'])
 
     except Exception as e:
         print(f"Error collecting metrics: {e}")
@@ -350,7 +350,7 @@ if __name__ == '__main__':
 
 ## State Synchronization
 
-### New Agents Join the Cluster
+### New Agents Join the Worker
 
 When a new agent pod starts:
 
@@ -360,7 +360,7 @@ When a new agent pod starts:
 4. Starts watching for future changes
 
 Example:
-- Cluster is in "pause" state (version 42)
+- Worker is in "pause" state (version 42)
 - New pod starts
 - Pod reads state, sees "pause"
 - Pod immediately pauses itself
@@ -372,7 +372,7 @@ When an agent restarts:
 
 1. On startup, agent queries current state
 2. Applies that state before starting main loop
-3. Example: If cluster is paused, restarted agent stays paused
+3. Example: If worker is paused, restarted agent stays paused
 
 ### Network Partitions
 
@@ -413,7 +413,7 @@ When an agent restarts:
 ### Check Which Mode is Active
 
 ```bash
-curl http://any-agent:8000/api/cluster/stats
+curl http://any-agent:8000/api/worker/stats
 ```
 
 Look for `watch_mode`:
@@ -429,14 +429,14 @@ kubectl logs -l app=pulling-agent | grep "Distributed Control"
 
 Expected output:
 ```
-[INFO] [Distributed Control] Initializing cluster coordination
+[INFO] [Distributed Control] Initializing worker coordination
 [INFO] ✓ MongoDB Change Streams are supported
 [INFO] Using MongoDB Change Streams (event-driven, real-time)
 ```
 
 Or for polling mode:
 ```
-[INFO] [Distributed Control] Initializing cluster coordination
+[INFO] [Distributed Control] Initializing worker coordination
 [WARNING] MongoDB Change Streams not available: Replica set required. Using polling fallback.
 [INFO] Using polling fallback (interval: 10s)
 ```
