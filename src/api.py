@@ -51,6 +51,26 @@ class MessageResponse(BaseModel):
     message: str
     state: Optional[str] = None
 
+class ClusterCommandResponse(BaseModel):
+    """Cluster command response"""
+    status: str
+    message: str
+    command: str
+    version: int
+    timestamp: str
+    reason: str
+    propagation: str
+
+class ClusterStateResponse(BaseModel):
+    """Cluster control state response"""
+    command: str
+    version: int
+    timestamp: str
+    reason: str
+    updated_by: str
+    watch_mode: Optional[str] = None
+    note: str
+
 
 class AgentAPI:
     """
@@ -230,11 +250,12 @@ class AgentAPI:
             - Uptime
             """
             uptime = (datetime.now() - self.start_time).total_seconds()
+            worker_stats = self.agent.worker.get_statistics()
 
             return StatsResponse(
                 state=self.agent.state.value,
-                batches_processed=self.agent._batches_processed,
-                documents_processed=self.agent._documents_processed,
+                batches_processed=worker_stats['batches_processed'],
+                documents_processed=worker_stats['documents_processed'],
                 errors_count=self.agent._errors_count,
                 last_heartbeat=self.agent._last_heartbeat.isoformat(),
                 uptime_seconds=uptime
@@ -280,6 +301,271 @@ class AgentAPI:
                 raise HTTPException(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                     detail=f"MongoDB connection error: {str(e)}"
+                )
+
+        # ========== CLUSTER CONTROL ENDPOINTS ==========
+        # These endpoints control ALL agents in the cluster via distributed coordination
+
+        @self.app.post("/api/cluster/pause", response_model=ClusterCommandResponse)
+        async def pause_all_agents(reason: str = "Manual cluster pause", updated_by: str = "api_user"):
+            """
+            Pause ALL agents in the cluster.
+
+            This uses MongoDB-based distributed control to coordinate all agent instances.
+            The command is propagated via:
+            - MongoDB Change Streams (event-driven, sub-second latency) if available, OR
+            - Polling (configurable interval, default 10s) as fallback
+
+            Args:
+                reason: Human-readable reason for the pause
+                updated_by: Who/what is issuing this command (for audit)
+
+            Returns:
+                Command acknowledgment with version number
+
+            Note:
+                - All agents will pause after completing their current batch
+                - Agents will receive the command within seconds
+                - Command survives pod restarts
+            """
+            if not self.agent.distributed_control:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Distributed control is not enabled on this agent"
+                )
+
+            try:
+                result = await self.agent.distributed_control.set_global_command(
+                    command="pause",
+                    reason=reason,
+                    updated_by=updated_by
+                )
+
+                watch_mode = self.agent.distributed_control.get_watch_mode()
+                propagation = (
+                    "Agents will pause within seconds (event-driven via Change Streams)"
+                    if watch_mode == "change_streams"
+                    else f"Agents will pause within {self.agent.config.control_polling_interval}s (polling mode)"
+                )
+
+                logger.info(f"[Cluster Control] Pause command issued by {updated_by}: {reason}")
+
+                return ClusterCommandResponse(
+                    status="success",
+                    message="Pause command issued to all agents in the cluster",
+                    command="pause",
+                    version=result["version"],
+                    timestamp=result["timestamp"].isoformat(),
+                    reason=reason,
+                    propagation=propagation
+                )
+
+            except Exception as e:
+                logger.error(f"Failed to set cluster pause command: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Failed to issue cluster pause: {str(e)}"
+                )
+
+        @self.app.post("/api/cluster/resume", response_model=ClusterCommandResponse)
+        async def resume_all_agents(reason: str = "Manual cluster resume", updated_by: str = "api_user"):
+            """
+            Resume ALL agents in the cluster.
+
+            This uses MongoDB-based distributed control to coordinate all agent instances.
+            The command is propagated via:
+            - MongoDB Change Streams (event-driven, sub-second latency) if available, OR
+            - Polling (configurable interval, default 10s) as fallback
+
+            Args:
+                reason: Human-readable reason for the resume
+                updated_by: Who/what is issuing this command (for audit)
+
+            Returns:
+                Command acknowledgment with version number
+
+            Note:
+                - All agents will resume processing immediately
+                - Agents will receive the command within seconds
+                - Command survives pod restarts
+            """
+            if not self.agent.distributed_control:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Distributed control is not enabled on this agent"
+                )
+
+            try:
+                result = await self.agent.distributed_control.set_global_command(
+                    command="running",
+                    reason=reason,
+                    updated_by=updated_by
+                )
+
+                watch_mode = self.agent.distributed_control.get_watch_mode()
+                propagation = (
+                    "Agents will resume within seconds (event-driven via Change Streams)"
+                    if watch_mode == "change_streams"
+                    else f"Agents will resume within {self.agent.config.control_polling_interval}s (polling mode)"
+                )
+
+                logger.info(f"[Cluster Control] Resume command issued by {updated_by}: {reason}")
+
+                return ClusterCommandResponse(
+                    status="success",
+                    message="Resume command issued to all agents in the cluster",
+                    command="running",
+                    version=result["version"],
+                    timestamp=result["timestamp"].isoformat(),
+                    reason=reason,
+                    propagation=propagation
+                )
+
+            except Exception as e:
+                logger.error(f"Failed to set cluster resume command: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Failed to issue cluster resume: {str(e)}"
+                )
+
+        @self.app.post("/api/cluster/shutdown", response_model=ClusterCommandResponse)
+        async def shutdown_all_agents(reason: str = "Manual cluster shutdown", updated_by: str = "api_user"):
+            """
+            Gracefully shutdown ALL agents in the cluster.
+
+            This uses MongoDB-based distributed control to coordinate all agent instances.
+            The command is propagated via:
+            - MongoDB Change Streams (event-driven, sub-second latency) if available, OR
+            - Polling (configurable interval, default 10s) as fallback
+
+            Args:
+                reason: Human-readable reason for the shutdown
+                updated_by: Who/what is issuing this command (for audit)
+
+            Returns:
+                Command acknowledgment with version number
+
+            Warning:
+                This will shutdown ALL agents in the cluster. Use with caution!
+            """
+            if not self.agent.distributed_control:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Distributed control is not enabled on this agent"
+                )
+
+            try:
+                result = await self.agent.distributed_control.set_global_command(
+                    command="shutdown",
+                    reason=reason,
+                    updated_by=updated_by
+                )
+
+                watch_mode = self.agent.distributed_control.get_watch_mode()
+                propagation = (
+                    "Agents will shutdown gracefully within seconds (event-driven via Change Streams)"
+                    if watch_mode == "change_streams"
+                    else f"Agents will shutdown within {self.agent.config.control_polling_interval}s (polling mode)"
+                )
+
+                logger.warning(f"[Cluster Control] SHUTDOWN command issued by {updated_by}: {reason}")
+
+                return ClusterCommandResponse(
+                    status="success",
+                    message="Shutdown command issued to all agents in the cluster",
+                    command="shutdown",
+                    version=result["version"],
+                    timestamp=result["timestamp"].isoformat(),
+                    reason=reason,
+                    propagation=propagation
+                )
+
+            except Exception as e:
+                logger.error(f"Failed to set cluster shutdown command: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Failed to issue cluster shutdown: {str(e)}"
+                )
+
+        @self.app.get("/api/cluster/control-state", response_model=ClusterStateResponse)
+        async def get_cluster_control_state():
+            """
+            Get the current global control state for the cluster.
+
+            Returns the command that all agents are currently subscribed to.
+            This shows what command is actively coordinating the cluster.
+
+            Returns:
+                Current cluster control state including:
+                - command: Current global command (running/pause/shutdown)
+                - version: Version number (increments on each change)
+                - timestamp: When the command was issued
+                - reason: Why the command was issued
+                - updated_by: Who issued the command
+                - watch_mode: How agents are watching (change_streams or polling)
+            """
+            if not self.agent.distributed_control:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Distributed control is not enabled on this agent"
+                )
+
+            try:
+                current = await self.agent.distributed_control.get_current_command()
+
+                if not current:
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Control state not initialized"
+                    )
+
+                watch_mode = self.agent.distributed_control.get_watch_mode()
+
+                return ClusterStateResponse(
+                    command=current["command"],
+                    version=current["version"],
+                    timestamp=current["timestamp"].isoformat(),
+                    reason=current.get("reason", ""),
+                    updated_by=current.get("updated_by", "unknown"),
+                    watch_mode=watch_mode,
+                    note="All agents in the cluster are subscribed to this state"
+                )
+
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to get cluster control state: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Failed to get cluster state: {str(e)}"
+                )
+
+        @self.app.get("/api/cluster/stats", response_model=Dict[str, Any])
+        async def get_cluster_stats():
+            """
+            Get distributed control system statistics.
+
+            Returns information about how the distributed control is operating:
+            - Watch mode (Change Streams vs polling)
+            - Current global command
+            - Polling interval (if using polling)
+            - Version and timing information
+            """
+            if not self.agent.distributed_control:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Distributed control is not enabled on this agent"
+                )
+
+            try:
+                stats = await self.agent.distributed_control.get_stats()
+                return stats
+
+            except Exception as e:
+                logger.error(f"Failed to get cluster stats: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Failed to get cluster stats: {str(e)}"
                 )
 
 

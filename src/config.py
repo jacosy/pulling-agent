@@ -31,7 +31,12 @@ class AgentConfig:
     shutdown_timeout: int = 30      # seconds for graceful shutdown
     heartbeat_interval: int = 5     # seconds between heartbeat updates
     max_retries: int = 3            # max retries for failed operations
-    
+
+    # Distributed control settings
+    enable_distributed_control: bool = True     # Enable distributed control coordination
+    enable_change_streams: bool = True          # Try Change Streams first (auto-fallback to polling)
+    control_polling_interval: int = 10          # seconds between polls (polling mode only)
+
     # Logging
     log_level: str = "INFO"
     
@@ -47,6 +52,9 @@ class AgentConfig:
             shutdown_timeout=int(os.getenv("SHUTDOWN_TIMEOUT", "30")),
             heartbeat_interval=int(os.getenv("HEARTBEAT_INTERVAL", "5")),
             max_retries=int(os.getenv("MAX_RETRIES", "3")),
+            enable_distributed_control=os.getenv("ENABLE_DISTRIBUTED_CONTROL", "true").lower() == "true",
+            enable_change_streams=os.getenv("ENABLE_CHANGE_STREAMS", "true").lower() == "true",
+            control_polling_interval=int(os.getenv("CONTROL_POLLING_INTERVAL", "10")),
             log_level=os.getenv("LOG_LEVEL", "INFO"),
         )
     
@@ -65,3 +73,5 @@ class AgentConfig:
             raise ValueError("BATCH_SIZE must be >= 1")
         if self.shutdown_timeout < 1:
             raise ValueError("SHUTDOWN_TIMEOUT must be >= 1")
+        if self.control_polling_interval < 1:
+            raise ValueError("CONTROL_POLLING_INTERVAL must be >= 1")
